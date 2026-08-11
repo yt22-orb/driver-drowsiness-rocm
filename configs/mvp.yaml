@@ -1,0 +1,38 @@
+data:
+  dataset_id: akahana/Driver-Drowsiness-Dataset
+  revision: 1770cfcacac05ff4ae280479ed610c3fcc6b4b7c
+  validation_fraction: 0.10
+  seed: 42
+  num_workers: 8
+  cache_dir: data/huggingface
+  dedup_manifest: artifacts/audit/dedup-manifest.json
+
+model:
+  architecture: mobilenet_v3_small
+  pretrained: true
+  image_size: 224
+  num_classes: 2
+
+training:
+  output_dir: artifacts/runs/mobilenet-v3-small
+  epochs: 15
+  batch_size: 128
+  learning_rate: 0.0003
+  weight_decay: 0.0001
+  patience: 4
+  amp: true
+  device: auto
+
+decision:
+  beta: 2.0
+  window_seconds: 2.0
+  minimum_valid_frames: 15
+  clear_margin: 0.15
+  clear_seconds: 1.0
+
+export:
+  opset: 18
+  parity_samples: 100
+  onnx_path: artifacts/export/drowsiness-mobilenet-v3-small.onnx
+  metadata_path: artifacts/export/model-metadata.json
+  web_model_dir: web/public/models

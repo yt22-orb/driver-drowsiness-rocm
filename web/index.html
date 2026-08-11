@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#08111f" />
+    <title>Driver Drowsiness Monitor</title>
+  </head>
+  <body>
+    <main class="shell">
+      <header>
+        <p class="eyebrow">ON-DEVICE COMPUTER VISION</p>
+        <h1>Driver Drowsiness Monitor</h1>
+        <p class="lede">Experimental thesis prototype. Camera frames never leave this browser.</p>
+      </header>
+
+      <section id="alert" class="alert" aria-live="assertive" hidden>
+        <strong>Possible drowsiness detected</strong>
+        <span>Stop driving safely and rest.</span>
+      </section>
+
+      <section class="dashboard">
+        <div class="viewer">
+          <video id="video" playsinline muted></video>
+          <img id="uploaded-image" alt="Uploaded driver preview" hidden />
+          <canvas id="overlay" aria-hidden="true"></canvas>
+          <div id="empty-state" class="empty-state">
+            <span class="camera-icon">◉</span>
+            <p>Start the camera or choose an image.</p>
+          </div>
+        </div>
+
+        <aside class="panel">
+          <div class="state-row">
+            <span id="state-dot" class="state-dot"></span>
+            <div>
+              <span class="label">SYSTEM STATUS</span>
+              <strong id="status">Loading model…</strong>
+            </div>
+          </div>
+
+          <div class="meter-block">
+            <div class="meter-label">
+              <span>Drowsiness score</span>
+              <strong id="score">—</strong>
+            </div>
+            <div class="meter"><div id="meter-fill" class="meter-fill"></div></div>
+            <p id="runtime" class="fine-print">Runtime not initialized</p>
+          </div>
+
+          <div class="controls">
+            <button id="start-camera" class="primary" disabled>Start camera</button>
+            <button id="stop-camera" disabled>Stop</button>
+            <label class="file-button">
+              Test an image
+              <input id="image-input" type="file" accept="image/jpeg,image/png" disabled />
+            </label>
+            <button id="mute" aria-pressed="false">Sound: on</button>
+          </div>
+
+          <p class="privacy">No video, image, or score is uploaded. This is not a certified safety system.</p>
+        </aside>
+      </section>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
