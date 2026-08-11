@@ -2,7 +2,7 @@ PYTHON ?= python3
 CONFIG ?= configs/mvp.yaml
 COMPOSE ?= docker compose -f compose.rocm.yaml
 
-.PHONY: install lint test smoke metadata-audit rocm-build rocm-check audit train evaluate export rig web-install web-dev web-build
+.PHONY: install lint test smoke metadata-audit rocm-build rocm-check audit train evaluate export report rig web-install web-dev web-build
 
 install:
 	$(PYTHON) -m pip install -e '.[dev]'
@@ -37,6 +37,9 @@ evaluate:
 
 export:
 	$(COMPOSE) run --rm trainer python -m drowsiness.export --config $(CONFIG)
+
+report:
+	$(COMPOSE) run --rm trainer sh -lc "python -m pip install -q '.[report]' && python -m drowsiness.report --config $(CONFIG)"
 
 rig: rocm-check audit train evaluate export
 

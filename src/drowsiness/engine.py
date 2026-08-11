@@ -53,6 +53,8 @@ def run_inference(
     loader: DataLoader,
     device: torch.device,
     criterion: nn.Module | None = None,
+    *,
+    use_amp: bool = False,
 ) -> InferenceResult:
     model.eval()
     all_labels: list[np.ndarray] = []
@@ -62,11 +64,13 @@ def run_inference(
     for images, labels in tqdm(loader, desc="evaluate", leave=False):
         images = images.to(device, non_blocking=True)
         labels = labels.to(device, non_blocking=True)
-        logits = model(images)
+        with torch.autocast(device_type=device.type, dtype=torch.float16, enabled=use_amp):
+            logits = model(images)
+            batch_loss = criterion(logits, labels) if criterion is not None else None
         probabilities = torch.softmax(logits.float(), dim=1)
         batch_size = int(labels.shape[0])
-        if criterion is not None:
-            running_loss += float(criterion(logits, labels)) * batch_size
+        if batch_loss is not None:
+            running_loss += float(batch_loss) * batch_size
         sample_count += batch_size
         all_labels.append(labels.cpu().numpy())
         all_scores.append(probabilities[:, 0].cpu().numpy())

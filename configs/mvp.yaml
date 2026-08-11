@@ -3,7 +3,13 @@ data:
   revision: 1770cfcacac05ff4ae280479ed610c3fcc6b4b7c
   validation_fraction: 0.10
   seed: 42
-  num_workers: 8
+  # Avoid forking loader processes after ROCm/HIP has initialized; this can
+  # deadlock at validation and at the start of later epochs on this rig.
+  num_workers: 0
+  # Pinned host memory triggers amdgpu/KFD userptr stalls on this ROCm rig.
+  pin_memory: false
+  # Release the training workers before starting the validation worker pool.
+  persistent_workers: false
   cache_dir: data/huggingface
   dedup_manifest: artifacts/audit/dedup-manifest.json
 
@@ -19,7 +25,6 @@ training:
   batch_size: 128
   learning_rate: 0.0003
   weight_decay: 0.0001
-  patience: 4
   amp: true
   device: auto
 

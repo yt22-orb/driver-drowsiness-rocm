@@ -17,7 +17,9 @@ dependencies = [
   "pyyaml>=6.0,<7",
   "scikit-learn>=1.6,<2",
   "torch==2.9.1",
-  "torchvision==0.24.1",
+  # Keep AMD's ROCm-patched 0.24.x build when installing in the pinned image.
+  # A strict 0.24.1 pin makes pip replace it with an incompatible PyPI wheel.
+  "torchvision>=0.24,<0.25",
   "tqdm>=4.67,<5",
 ]
 
@@ -26,6 +28,10 @@ dev = [
   "pytest>=8.3,<10",
   "pytest-cov>=6,<8",
   "ruff>=0.9,<1",
+]
+report = [
+  "python-docx>=1.1,<2",
+  "reportlab>=4.2,<5",
 ]
 
 [tool.hatch.build.targets.wheel]

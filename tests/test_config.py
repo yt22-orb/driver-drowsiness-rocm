@@ -11,6 +11,8 @@ def test_mvp_config_is_pinned() -> None:
     assert config.data.revision == DATASET_REVISION
     assert config.model.num_classes == len(LABELS)
     assert config.model.image_size == 224
+    assert config.data.pin_memory is False
+    assert config.data.persistent_workers is False
 
 
 def test_invalid_validation_fraction_is_rejected(tmp_path: Path) -> None:

@@ -17,7 +17,9 @@ class DataConfig:
     revision: str = DATASET_REVISION
     validation_fraction: float = 0.10
     seed: int = 42
-    num_workers: int = 8
+    num_workers: int = 0
+    pin_memory: bool = False
+    persistent_workers: bool = False
     cache_dir: str = "data/huggingface"
     dedup_manifest: str = "artifacts/audit/dedup-manifest.json"
 
@@ -37,7 +39,6 @@ class TrainingConfig:
     batch_size: int = 128
     learning_rate: float = 3e-4
     weight_decay: float = 1e-4
-    patience: int = 4
     amp: bool = True
     device: str = "auto"
 
@@ -93,6 +94,8 @@ def validate_config(config: ProjectConfig) -> None:
         raise ValueError(f"revision must remain pinned to {DATASET_REVISION!r}")
     if not 0 < config.data.validation_fraction < 0.5:
         raise ValueError("validation_fraction must be between 0 and 0.5")
+    if config.data.num_workers < 0:
+        raise ValueError("num_workers must be non-negative")
     if config.model.architecture != "mobilenet_v3_small":
         raise ValueError("Only mobilenet_v3_small is supported by the MVP export contract")
     if config.model.num_classes != 2:

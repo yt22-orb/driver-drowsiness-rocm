@@ -12,13 +12,20 @@ No NVIDIA hardware, CUDA build, hosted inference API, or cloud camera processing
 > rely on it to decide whether it is safe to drive. The source dataset has no subject identifiers,
 > so the supplied split does not establish generalization to unseen drivers.
 
+## Try the trained model
+
+The quickest route does not require ROCm, PyTorch, the training dataset, or a GPU. Download the
+pretrained ONNX model from the GitHub Release and run the local browser app by following
+[`RUN_MODEL.md`](RUN_MODEL.md). Camera frames and scores remain in the browser.
+
 ## Repository and licensing boundary
 
-This public repository contains original source code and documentation only. It intentionally has
-no software license, which means no reuse permission is granted by default. The source dataset does
-not declare a license on its Hugging Face card. Dataset files, copied sample images, trained
-checkpoints, ONNX weights, and other derived model artifacts are therefore ignored and must not be
-published until their rights are resolved.
+The Git history contains original source code and documentation only. It intentionally has no
+software license, which means no reuse permission is granted by default. Dataset files and copied
+sample images remain excluded. The source dataset does not declare a license on its Hugging Face
+card; the separately distributed Release weights are provided for research and evaluation at the
+repository owner's direction, without granting rights to the source dataset. Users must review the
+dataset's terms and resolve reuse rights before redistribution or non-research use.
 
 ## Architecture
 
@@ -30,8 +37,9 @@ Hugging Face images (227x227 face crops)
         |
 MobileNetV3-Small, ImageNet initialization, 224x224 RGB
         |
-        +-- validation F2 selects checkpoint and drowsy threshold
-        +-- official test split is evaluated once
+        +-- latest epoch checkpoint is saved without per-epoch validation
+        +-- post-training validation F2 selects the drowsy threshold
+        +-- official test split is then evaluated once
         |
 FP32 ONNX model + JSON inference contract
         |
@@ -86,6 +94,7 @@ make audit
 make train
 make evaluate
 make export
+make report
 ```
 
 `make audit` downloads/caches the dataset, validates every decoded image, counts dimensions and
@@ -101,11 +110,16 @@ Expected outputs:
 | Dedup manifest | `artifacts/audit/dedup-manifest.json` |
 | Resolved config | `artifacts/runs/mobilenet-v3-small/resolved-config.json` |
 | Epoch history | `artifacts/runs/mobilenet-v3-small/history.jsonl` |
-| Best checkpoint | `artifacts/runs/mobilenet-v3-small/best.pt` |
+| Latest checkpoint | `artifacts/runs/mobilenet-v3-small/best.pt` |
 | Test metrics | `artifacts/evaluation/test-metrics.json` |
 | ONNX model | `artifacts/export/drowsiness-mobilenet-v3-small.onnx` |
 | Inference contract | `artifacts/export/model-metadata.json` |
 | Browser copies | `web/public/models/` |
+| DOCX/PDF report | `artifacts/reports/driver-drowsiness-model-report.*` |
+
+The trained PyTorch checkpoint, browser-ready ONNX weights, metadata, exact evaluation metrics, and
+DOCX/PDF findings reports are distributed on the
+[`v0.1.0-model` release page](https://github.com/yt22-orb/driver-drowsiness-rocm/releases/tag/v0.1.0-model).
 
 Training defaults live in [`configs/mvp.yaml`](configs/mvp.yaml). The RX 7800 XT default batch size
 is 128. If it runs out of memory, rerun training with `--batch-size 64` inside the Compose command
@@ -158,11 +172,14 @@ a usable drowsiness classifier.
 - Mild horizontal flip, brightness/contrast/saturation jitter, translation, and ±5° rotation.
 - Inverse-frequency cross-entropy weights.
 - AdamW, learning rate `3e-4`, weight decay `1e-4`, cosine schedule, and FP16 ROCm AMP.
-- Maximum 15 epochs and early stopping after four epochs without improved validation drowsy F2.
-- The decision threshold is selected only from validation predictions with F2, which weights missed
-  drowsy samples more heavily than false alarms.
-- The untouched official test split uses the saved checkpoint and frozen validation threshold.
-- Reported metrics: accuracy, balanced accuracy, macro F1, drowsy precision/recall/F2, ROC-AUC,
+- Training runs for 15 epochs and saves the latest checkpoint after every epoch without performing
+  validation between epochs.
+- `make evaluate` selects the decision threshold from validation predictions using F2, which weights
+  missed drowsy samples more heavily than false alarms.
+- The untouched official test split is evaluated after threshold selection using the same checkpoint
+  and frozen validation threshold.
+- Reported metrics: accuracy, balanced accuracy, macro/weighted F1, drowsy precision/recall/F2,
+  MCC, Cohen's kappa, specificity, NPV, false-positive/negative rates, ROC-AUC, average precision,
   class counts, and the confusion matrix in `[Drowsy, Non Drowsy]` order.
 
 ## Troubleshooting

@@ -1,4 +1,4 @@
-"""Evaluate a trained checkpoint once against the untouched official test split."""
+"""Calibrate on validation, then evaluate once against the official test split."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader
 from .config import load_config
 from .data import prepare_datasets
 from .engine import run_inference
-from .metrics import classification_metrics
+from .metrics import classification_metrics, select_fbeta_threshold
 from .model import build_model
 from .utils import resolve_device, write_json
 
@@ -36,19 +36,41 @@ def main() -> None:
     model.to(device)
 
     prepared = prepare_datasets(config.data, config.model)
-    loader = DataLoader(
+    loader_args = {
+        "batch_size": config.training.batch_size,
+        "shuffle": False,
+        "num_workers": config.data.num_workers,
+        "pin_memory": config.data.pin_memory and device.type == "cuda",
+        "persistent_workers": (config.data.persistent_workers and config.data.num_workers > 0),
+    }
+    validation_loader = DataLoader(prepared.validation, **loader_args)
+    test_loader = DataLoader(
         prepared.test,
-        batch_size=config.training.batch_size,
-        shuffle=False,
-        num_workers=config.data.num_workers,
-        pin_memory=device.type == "cuda",
-        persistent_workers=config.data.num_workers > 0,
+        **loader_args,
     )
-    result = run_inference(model, loader, device)
+    use_amp = bool(config.training.amp and device.type == "cuda")
+    validation = run_inference(
+        model,
+        validation_loader,
+        device,
+        use_amp=use_amp,
+    )
+    threshold, _ = select_fbeta_threshold(
+        validation.labels,
+        validation.drowsy_scores,
+        config.decision.beta,
+    )
+    validation_metrics = classification_metrics(
+        validation.labels,
+        validation.drowsy_scores,
+        threshold,
+        config.decision.beta,
+    )
+    result = run_inference(model, test_loader, device, use_amp=use_amp)
     metrics = classification_metrics(
         result.labels,
         result.drowsy_scores,
-        float(checkpoint["threshold"]),
+        threshold,
         config.decision.beta,
     )
     metrics.update(
@@ -57,8 +79,13 @@ def main() -> None:
             "checkpoint_epoch": int(checkpoint["epoch"]),
             "dataset_revision": config.data.revision,
             "device": str(device),
+            "validation_metrics": validation_metrics,
         }
     )
+    checkpoint["threshold"] = threshold
+    checkpoint["threshold_calibrated"] = True
+    checkpoint["validation_metrics"] = validation_metrics
+    torch.save(checkpoint, checkpoint_path)
     write_json(args.output, metrics)
     print(metrics)
 

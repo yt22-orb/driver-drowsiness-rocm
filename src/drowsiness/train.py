@@ -13,8 +13,7 @@ from torch.utils.data import DataLoader
 
 from .config import load_config
 from .data import prepare_datasets
-from .engine import run_inference, train_one_epoch
-from .metrics import classification_metrics, select_fbeta_threshold
+from .engine import train_one_epoch
 from .model import build_model
 from .utils import append_jsonl, resolve_device, seed_everything, write_json
 
@@ -41,11 +40,10 @@ def main() -> None:
     seed_everything(config.data.seed)
     device = resolve_device(config.training.device)
     prepared = prepare_datasets(config.data, config.model)
-    pin_memory = device.type == "cuda"
     common_loader = {
         "num_workers": config.data.num_workers,
-        "pin_memory": pin_memory,
-        "persistent_workers": config.data.num_workers > 0,
+        "pin_memory": config.data.pin_memory and device.type == "cuda",
+        "persistent_workers": (config.data.persistent_workers and config.data.num_workers > 0),
     }
     generator = torch.Generator().manual_seed(config.data.seed)
     train_loader = DataLoader(
@@ -55,13 +53,6 @@ def main() -> None:
         generator=generator,
         **common_loader,
     )
-    validation_loader = DataLoader(
-        prepared.validation,
-        batch_size=config.training.batch_size,
-        shuffle=False,
-        **common_loader,
-    )
-
     model = build_model(config.model).to(device)
     counts = Counter(prepared.train_labels)
     total = sum(counts.values())
@@ -88,8 +79,6 @@ def main() -> None:
     history_path.unlink(missing_ok=True)
     checkpoint_path = output_dir / "best.pt"
 
-    best_score = -1.0
-    stale_epochs = 0
     started = time.time()
     for epoch in range(1, config.training.epochs + 1):
         train_loss = train_one_epoch(
@@ -101,60 +90,41 @@ def main() -> None:
             device,
             use_amp=use_amp,
         )
-        validation = run_inference(model, validation_loader, device, criterion)
-        threshold, _ = select_fbeta_threshold(
-            validation.labels, validation.drowsy_scores, config.decision.beta
-        )
-        metrics = classification_metrics(
-            validation.labels,
-            validation.drowsy_scores,
-            threshold,
-            config.decision.beta,
-        )
         record = {
             "epoch": epoch,
             "learning_rate": optimizer.param_groups[0]["lr"],
             "train_loss": train_loss,
-            "validation_loss": validation.mean_loss,
-            **metrics,
         }
         append_jsonl(history_path, record)
         print(record)
-
-        score = float(metrics["drowsy_fbeta"])
-        if score > best_score:
-            best_score = score
-            stale_epochs = 0
-            torch.save(
-                {
-                    "model_state_dict": model.state_dict(),
-                    "threshold": threshold,
-                    "validation_metrics": metrics,
-                    "config": config.to_dict(),
-                    "epoch": epoch,
-                    "labels": ["Drowsy", "Non Drowsy"],
-                },
-                checkpoint_path,
-            )
-        else:
-            stale_epochs += 1
+        torch.save(
+            {
+                "model_state_dict": model.state_dict(),
+                "threshold": 0.5,
+                "threshold_calibrated": False,
+                "validation_metrics": None,
+                "config": config.to_dict(),
+                "epoch": epoch,
+                "labels": ["Drowsy", "Non Drowsy"],
+            },
+            checkpoint_path,
+        )
         scheduler.step()
-        if stale_epochs >= config.training.patience:
-            print(f"Early stopping after epoch {epoch}")
-            break
 
     write_json(
         output_dir / "training-summary.json",
         {
-            "best_validation_fbeta": best_score,
             "checkpoint": str(checkpoint_path),
+            "epochs_completed": config.training.epochs,
+            "evaluation_deferred": True,
             "device": str(device),
             "torch_version": torch.__version__,
             "torch_hip_version": torch.version.hip,
             "elapsed_seconds": time.time() - started,
         },
     )
-    print(f"Best checkpoint: {checkpoint_path}")
+    print(f"Latest checkpoint: {checkpoint_path}")
+    print("Run `make evaluate` to calibrate the threshold and evaluate the test split.")
 
 
 if __name__ == "__main__":
