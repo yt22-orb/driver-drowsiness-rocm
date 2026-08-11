@@ -121,6 +121,19 @@ The trained PyTorch checkpoint, browser-ready ONNX weights, metadata, exact eval
 DOCX/PDF findings reports are distributed on the
 [`v0.1.0-model` release page](https://github.com/yt22-orb/driver-drowsiness-rocm/releases/tag/v0.1.0-model).
 
+### Dataset credit and direct weight downloads
+
+This project credits and uses the
+[Driver Drowsiness Dataset by akahana on Hugging Face](https://huggingface.co/datasets/akahana/Driver-Drowsiness-Dataset),
+at the pinned revision shown above. The trained artifacts are available directly here:
+
+- [PyTorch checkpoint (`best.pt`)](https://github.com/yt22-orb/driver-drowsiness-rocm/releases/download/v0.1.0-model/best.pt)
+- [Browser ONNX weights](https://github.com/yt22-orb/driver-drowsiness-rocm/releases/download/v0.1.0-model/drowsiness-mobilenet-v3-small.onnx)
+- [Inference metadata](https://github.com/yt22-orb/driver-drowsiness-rocm/releases/download/v0.1.0-model/model-metadata.json)
+
+The Hugging Face dataset card currently declares no license. This attribution is not a license grant;
+review the dataset's terms and resolve reuse rights before redistribution or non-research use.
+
 Training defaults live in [`configs/mvp.yaml`](configs/mvp.yaml). The RX 7800 XT default batch size
 is 128. If it runs out of memory, rerun training with `--batch-size 64` inside the Compose command
 shown by `make train`, or change only `training.batch_size` in the YAML and record the change.
