@@ -230,8 +230,8 @@ Handoff state:
 | --- | --- |
 | Repository | `yt22-orb/driver-drowsiness-rocm` |
 | Branch | `Ken/initial-mvp` |
-| Pull request | `PENDING_PR_URL` |
-| Handoff commit | `PENDING_HANDOFF_COMMIT` |
+| Pull request | [#1 — Build ROCm driver drowsiness MVP](https://github.com/yt22-orb/driver-drowsiness-rocm/pull/1) |
+| Implementation handoff commit | `d42763f` |
 
 Verification boundary:
 
@@ -242,7 +242,7 @@ Verification boundary:
 | CPU forward/backward smoke step | ROCm FP16 mixed-precision training |
 | Random-weight ONNX graph/parity | Complete model convergence and checkpoint selection |
 | TypeScript typecheck and production build | Final official-test metrics |
-| GitHub Actions CPU/browser checks | Trained ONNX browser score and alarm behavior |
+| CI-equivalent Python/browser commands | Trained ONNX browser score and alarm behavior |
 
 On the rig, copy [`scripts/rig-results-template.md`](scripts/rig-results-template.md) to a dated file,
 fill it with exact commands and outputs, and update this README's dated results section. Never invent
