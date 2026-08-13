@@ -1,0 +1,9 @@
+# Agent Implementation Requirements
+
+Build the drowsiness-detection CNN from scratch for this project.
+
+- Do **not** use MediaPipe for face, landmark, or feature extraction.
+- Do **not** use the pre-trained `MobileNetV3-Small` model (or any MobileNetV3-Small checkpoint/backbone).
+- Define, train, and use this repository's own CNN architecture and weights.
+
+The final implementation must keep the model pipeline self-contained and document the custom architecture, training process, and inference inputs.
