@@ -1,0 +1,20 @@
+services:
+  trainer:
+    build:
+      context: .
+      dockerfile: Dockerfile.rocm
+    image: driver-drowsiness-rocm:7.2.1
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+    devices:
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
+    group_add:
+      - video
+    ipc: host
+    shm_size: 8gb
+    environment:
+      HF_HOME: /workspace/data/huggingface
+    stdin_open: true
+    tty: true

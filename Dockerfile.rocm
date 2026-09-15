@@ -1,0 +1,17 @@
+FROM rocm/pytorch:rocm7.2.1_ubuntu24.04_py3.12_pytorch_release_2.9.1
+
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    HF_HOME=/workspace/data/huggingface
+
+WORKDIR /workspace
+
+COPY pyproject.toml README.md ./
+COPY src ./src
+RUN python -m pip install --no-cache-dir -e .
+
+COPY configs ./configs
+COPY tests ./tests
+
+CMD ["bash"]
