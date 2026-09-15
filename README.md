@@ -1,52 +1,54 @@
 # Driver Drowsiness ROCm
 
-An experimental computer-vision system that fine-tunes MobileNetV3-Small on the
+An experimental driver-drowsiness image classifier built around this repository's own compact
+convolutional neural network. The network is initialized randomly, trained on the pinned
 [Driver Drowsiness Dataset](https://huggingface.co/datasets/akahana/Driver-Drowsiness-Dataset),
-exports the classifier to ONNX, and runs webcam or image inference locally in a browser.
+exported to ONNX, and run locally in a browser.
 
 The training environment targets an AMD Radeon RX 7800 XT with ROCm 7.2.1 and PyTorch 2.9.1.
-No NVIDIA hardware, CUDA build, hosted inference API, or cloud camera processing is required.
 
 > [!WARNING]
-> This is an experimental thesis prototype, not a certified automotive safety system. Do not
-> rely on it to decide whether it is safe to drive. The source dataset has no subject identifiers,
-> so the supplied split does not establish generalization to unseen drivers.
+> This is an experimental thesis prototype, not a certified automotive safety system. Do not rely
+> on it to decide whether it is safe to drive. Never test it while driving.
 
-## Try the trained model
+## Self-contained custom-model boundary
 
-The quickest route does not require ROCm, PyTorch, the training dataset, or a GPU. Download the
-pretrained ONNX model from the GitHub Release and run the local browser app by following
-[`RUN_MODEL.md`](RUN_MODEL.md). Camera frames and scores remain in the browser.
+The current training and export pipeline contains one learned model: `DrowsinessCNN` from
+[`src/drowsiness/model.py`](src/drowsiness/model.py). It does not load an external backbone,
+detector, landmark estimator, feature extractor, or third-party checkpoint. Custom checkpoints and
+browser metadata carry an architecture/weight-origin marker, and evaluation/export reject artifacts
+that were not produced by this trainer.
 
-## Repository and licensing boundary
+The source dataset contains 227 × 227 face crops, so the model is a face-crop classifier rather
+than a general scene detector. Browser inference uses a visible, deterministic center crop; the user
+must keep one face centered and filling that guide. This limitation is intentional and avoids a
+hidden second model in the custom pipeline. The browser's explicitly labeled legacy option is a
+separate comparison path: it runs the earlier MobileNetV3 release with MediaPipe face detection.
 
-The Git history contains original source code and documentation only. It intentionally has no
-software license, which means no reuse permission is granted by default. Dataset files and copied
-sample images remain excluded. The source dataset does not declare a license on its Hugging Face
-card; the separately distributed Release weights are provided for research and evaluation at the
-repository owner's direction, without granting rights to the source dataset. Users must review the
-dataset's terms and resolve reuse rights before redistribution or non-research use.
+## Custom architecture
 
-## Architecture
+`drowsiness_cnn_v1` is defined from ordinary PyTorch layers and has approximately 1.3 million
+trainable parameters:
 
 ```text
-Hugging Face images (227x227 face crops)
-        |
-        +-- exact-duplicate audit manifest
-        +-- stratified train/validation split (seed 42)
-        |
-MobileNetV3-Small, ImageNet initialization, 224x224 RGB
-        |
-        +-- latest epoch checkpoint is saved without per-epoch validation
-        +-- post-training validation F2 selects the drowsy threshold
-        +-- official test split is then evaluated once
-        |
-FP32 ONNX model + JSON inference contract
-        |
-MediaPipe face crop -> ONNX Runtime Web -> 2-second warning window
+RGB [N, 3, 224, 224]
+  -> 5x5 Conv(3 -> 24), stride 2 + BatchNorm + SiLU
+  -> 3x3 MaxPool, stride 2
+  -> 2 residual blocks at 32 channels
+  -> 2 residual blocks at 64 channels  (first block downsamples)
+  -> 2 residual blocks at 96 channels  (first block downsamples)
+  -> 2 residual blocks at 160 channels (first block downsamples)
+  -> global average pooling
+  -> dropout(0.25)
+  -> Linear(160 -> 2 logits)
 ```
 
-The immutable dataset contract is:
+Each residual block contains two standard 3 × 3 convolutions. A learned 1 × 1 shortcut is used when
+the spatial size or channel count changes. Convolutions use random Kaiming-normal initialization;
+batch-normalization scales start at one, offsets at zero, and the final linear layer starts from a
+small random normal distribution. No weights are downloaded during model construction.
+
+## Dataset and labels
 
 | Property | Value |
 | --- | --- |
@@ -54,111 +56,102 @@ The immutable dataset contract is:
 | Revision | `1770cfcacac05ff4ae280479ed610c3fcc6b4b7c` |
 | Official train rows | 33,434 |
 | Official test rows | 8,359 |
-| Label `0` | `Drowsy` (the positive class) |
+| Label `0` | `Drowsy` (positive class) |
 | Label `1` | `Non Drowsy` |
 
-The browser model contract is fixed to float32 `images` shaped `[1, 3, 224, 224]`, normalized with
-ImageNet mean/std, and float32 `logits` shaped `[1, 2]` in the label order above.
+The repository pins the revision and preserves the official test split. The dataset card does not
+declare a license; review its terms before redistributing data or derived weights.
 
-## RX 7800 XT prerequisites
+## Training process
 
-Use one of AMD's supported host combinations, such as Ubuntu 22.04.5 Desktop HWE with kernel 6.8,
-or Ubuntu 24.04.4 Desktop HWE with kernel 6.17. Install the matching Radeon Software for Linux with
-ROCm and Docker Engine. AMD lists the RX 7800 XT, ROCm 7.2.1, and PyTorch 2.9.1 as an officially
-supported production combination:
-
-- [ROCm Radeon Linux support matrix](https://rocm.docs.amd.com/projects/radeon-ryzen/en/latest/docs/compatibility/compatibilityrad/native_linux/native_linux_compatibility.html)
-- [Install PyTorch for ROCm on Radeon](https://rocm.docs.amd.com/projects/radeon-ryzen/en/latest/docs/install/installrad/native_linux/install-pytorch.html)
-
-Confirm the host exposes both device nodes before building:
+The complete workflow is:
 
 ```bash
-ls -l /dev/kfd /dev/dri
-docker --version
-docker compose version
-```
-
-## Run the complete rig workflow
-
-Clone and enter the repository, then run each stage separately so a failed stage is obvious:
-
-```bash
-git clone https://github.com/yt22-orb/driver-drowsiness-rocm.git
-cd driver-drowsiness-rocm
-git fetch origin Ken/initial-mvp
-git switch --track origin/Ken/initial-mvp
-
 make rocm-build
 make rocm-check
 make audit
 make train
 make evaluate
 make export
-make report
+make web-build
 ```
 
-`make audit` downloads/caches the dataset, validates every decoded image, counts dimensions and
-classes, and writes `artifacts/audit/dedup-manifest.json`. Training preserves official test copies,
-removes exact cross-split train copies, and keeps only the first exact duplicate within training.
-Perceptual-hash collisions are reported as suspects but are not removed automatically.
+Training performs a seeded, stratified 90/10 split of the audited official training split. Exact
+duplicates identified by the audit manifest are removed from training before the split. Training
+augmentation consists of horizontal flip, mild color jitter, translation, and ±5° rotation.
+Evaluation preprocessing is deterministic.
 
-Expected outputs:
+The network is optimized from random initialization with inverse-frequency weighted cross entropy,
+AdamW (`3e-4` learning rate, `1e-4` weight decay), cosine learning-rate decay, and FP16 automatic
+mixed precision on ROCm. Validation loss is measured after every epoch. `best.pt` is the epoch with
+the lowest validation loss; `last.pt` records the final epoch. The official test set is not used for
+checkpoint selection.
+
+After training, `make evaluate` chooses a drowsy-score threshold on validation data by maximizing
+F2, then evaluates the frozen checkpoint and threshold once on the official test split. `make
+export` validates the checkpoint provenance, exports fixed-batch FP32 ONNX, checks PyTorch/ONNX
+parity, and copies the model plus metadata into `web/public/models/`.
+
+Default outputs:
 
 | Artifact | Path |
 | --- | --- |
 | Audit report | `artifacts/audit/dataset-audit.json` |
 | Dedup manifest | `artifacts/audit/dedup-manifest.json` |
-| Resolved config | `artifacts/runs/mobilenet-v3-small/resolved-config.json` |
-| Epoch history | `artifacts/runs/mobilenet-v3-small/history.jsonl` |
-| Latest checkpoint | `artifacts/runs/mobilenet-v3-small/best.pt` |
+| Resolved config | `artifacts/runs/drowsiness-cnn-v1/resolved-config.json` |
+| Epoch history | `artifacts/runs/drowsiness-cnn-v1/history.jsonl` |
+| Best checkpoint | `artifacts/runs/drowsiness-cnn-v1/best.pt` |
+| Last checkpoint | `artifacts/runs/drowsiness-cnn-v1/last.pt` |
 | Test metrics | `artifacts/evaluation/test-metrics.json` |
-| ONNX model | `artifacts/export/drowsiness-mobilenet-v3-small.onnx` |
-| Inference contract | `artifacts/export/model-metadata.json` |
-| Browser copies | `web/public/models/` |
-| DOCX/PDF report | `artifacts/reports/driver-drowsiness-model-report.*` |
+| ONNX model | `artifacts/export/drowsiness-cnn-v1.onnx` |
+| Inference metadata | `artifacts/export/model-metadata.json` |
 
-The trained PyTorch checkpoint, browser-ready ONNX weights, metadata, exact evaluation metrics, and
-DOCX/PDF findings reports are distributed on the
-[`v0.1.0-model` release page](https://github.com/yt22-orb/driver-drowsiness-rocm/releases/tag/v0.1.0-model).
+Generated datasets, weights, reports, and exports are ignored by Git.
 
-### Dataset credit and direct weight downloads
+## Inference input contract
 
-This project credits and uses the
-[Driver Drowsiness Dataset by akahana on Hugging Face](https://huggingface.co/datasets/akahana/Driver-Drowsiness-Dataset),
-at the pinned revision shown above. The trained artifacts are available directly here:
+Training, evaluation, Python parity checks, and browser inference share this tensor contract:
 
-- [PyTorch checkpoint (`best.pt`)](https://github.com/yt22-orb/driver-drowsiness-rocm/releases/download/v0.1.0-model/best.pt)
-- [Browser ONNX weights](https://github.com/yt22-orb/driver-drowsiness-rocm/releases/download/v0.1.0-model/drowsiness-mobilenet-v3-small.onnx)
-- [Inference metadata](https://github.com/yt22-orb/driver-drowsiness-rocm/releases/download/v0.1.0-model/model-metadata.json)
+| Field | Contract |
+| --- | --- |
+| Source | One centered, tightly framed driver face in RGB |
+| Browser crop | Centered square, side = 70% of the shorter source dimension |
+| Resize | 224 × 224 |
+| Tensor | float32 NCHW `[1, 3, 224, 224]` |
+| Channel order | RGB |
+| Scaling | `x = ((uint8 / 255) - 0.5) / 0.5`, producing `[-1, 1]` |
+| Output | float32 logits `[1, 2]` in `[Drowsy, Non Drowsy]` order |
+| Score | softmax probability at label index 0 |
 
-The Hugging Face dataset card currently declares no license. This attribution is not a license grant;
-review the dataset's terms and resolve reuse rights before redistribution or non-research use.
-
-Training defaults live in [`configs/mvp.yaml`](configs/mvp.yaml). The RX 7800 XT default batch size
-is 128. If it runs out of memory, rerun training with `--batch-size 64` inside the Compose command
-shown by `make train`, or change only `training.batch_size` in the YAML and record the change.
+For the webcam, place one face inside and fill the dashed square. For a still image, supply a JPEG
+or PNG in which one face is centered in the same region. Frames without a correctly positioned face
+are out of distribution; the app cannot identify or reject them because it deliberately uses no
+auxiliary detector.
 
 ## Run browser inference
 
-The export command copies the ignored ONNX model and metadata into `web/public/models/`. After that:
+Train, evaluate, and export the custom model first. Then:
 
 ```bash
 make web-install
 make web-dev
 ```
 
-Open <http://127.0.0.1:5173>. `localhost` is a secure browser context, so camera permission works.
-The app uses WebGPU when available and ONNX Runtime WASM otherwise. MediaPipe finds the largest
-face, adds 15% crop padding, and the classifier runs at a target 10 Hz. An alarm starts only after a
-sustained, smoothed drowsy score; single uploaded images show a score but never sound the alarm.
+Open <http://127.0.0.1:5173>. The app uses WebGPU when available and ONNX Runtime WebAssembly as a
+fallback. It classifies the displayed crop at a target 10 Hz. A warning requires a sustained score
+over the exported threshold; still-image tests show one score and never sound the alarm. Images,
+frames, and scores stay in the browser.
 
-All frames and scores stay in the browser. The MediaPipe and ONNX Runtime Web runtime assets are
-downloaded from their official CDNs when the page initializes, so the current MVP is not fully
-offline on first use.
+The model selector can also run the earlier MobileNetV3-Small release alongside the custom CNN.
+That legacy option retains its original MediaPipe face-detection crop and ImageNet normalization;
+the custom CNN retains its fixed center-crop contract. See [`RUN_MODEL.md`](RUN_MODEL.md) for the
+required local asset filenames.
 
-## CPU development on macOS or Linux
+See [`RUN_MODEL.md`](RUN_MODEL.md) for the short operating guide.
 
-The project requires Python 3.12 or 3.13. CPU development does not download the full dataset:
+## CPU development
+
+Python 3.12 or 3.13 is required:
 
 ```bash
 python3.12 -m venv .venv
@@ -174,124 +167,34 @@ make web-install
 make web-build
 ```
 
-The smoke command performs a real forward/backward optimizer step using synthetic images, exports
-a temporary random-weight ONNX model, checks it with `onnx.checker`, and requires PyTorch/ONNX
-predictions to match with maximum absolute logit difference below `1e-4`. That smoke model is not
-a usable drowsiness classifier.
+`make smoke` performs a forward/backward optimizer step on synthetic images, exports a temporary
+random-weight ONNX graph, validates it with `onnx.checker`, and checks numerical parity. The smoke
+artifact is not a trained classifier.
 
-## Training and evaluation behavior
+## ROCm notes
 
-- MobileNetV3-Small with ImageNet pretrained weights and a new two-logit head.
-- Mild horizontal flip, brightness/contrast/saturation jitter, translation, and ±5° rotation.
-- Inverse-frequency cross-entropy weights.
-- AdamW, learning rate `3e-4`, weight decay `1e-4`, cosine schedule, and FP16 ROCm AMP.
-- Training runs for 15 epochs and saves the latest checkpoint after every epoch without performing
-  validation between epochs.
-- `make evaluate` selects the decision threshold from validation predictions using F2, which weights
-  missed drowsy samples more heavily than false alarms.
-- The untouched official test split is evaluated after threshold selection using the same checkpoint
-  and frozen validation threshold.
-- Reported metrics: accuracy, balanced accuracy, macro/weighted F1, drowsy precision/recall/F2,
-  MCC, Cohen's kappa, specificity, NPV, false-positive/negative rates, ROC-AUC, average precision,
-  class counts, and the confusion matrix in `[Drowsy, Non Drowsy]` order.
+The container expects `/dev/kfd` and `/dev/dri`. PyTorch retains the `torch.cuda` API name when it is
+built for ROCm; `make rocm-check` verifies the HIP build and requires a device name containing
+`7800 XT`. The image deliberately preserves AMD's ROCm-patched PyTorch/TorchVision packages.
 
-## Troubleshooting
+If training runs out of memory, reduce the batch size from 128 to 64, then 32, and record the change.
+Do not change the image size, architecture, labels, or official test boundary as an OOM workaround.
+If ONNX parity fails, do not publish the export; check preprocessing, eval mode, opset, output order,
+and runtime versions first.
 
-### `/dev/kfd` is missing
+## Verification checklist
 
-The ROCm kernel driver is not loaded or the host installation/GPU is unsupported. Do not change the
-container to fake success. Recheck AMD's host matrix, Radeon driver installation, user membership in
-`video`/`render`, and reboot after driver changes.
-
-### `torch.cuda.is_available()` is false
-
-PyTorch intentionally retains the `torch.cuda` API name on ROCm. `make rocm-check` also verifies
-`torch.version.hip` and requires a detected device name containing `7800 XT`. If HIP is empty, the
-wrong CPU/CUDA wheel replaced AMD's container package; rebuild the pinned image without adding a
-separate PyTorch index.
-
-### GPU out of memory
-
-Reduce batch size from 128 to 64, then 32. Record the final batch size and do not change input size,
-architecture, label mapping, or test split as an OOM workaround.
-
-### Dataset load or decode fails
-
-Confirm at least 6 GB free for the 2.76 GB download plus decoded/cache overhead. Delete no shared
-Hugging Face cache blindly. Save the full exception, dataset revision, failing split/index, and rerun
-the metadata audit before changing dependencies.
-
-### ONNX parity fails
-
-Do not publish the exported weights. Preserve the checkpoint, record the maximum difference and
-mismatched samples, then verify preprocessing, eval mode, opset 18, output order, and ONNX Runtime
-version. The exporter deliberately uses a fixed batch and conservative legacy Torch exporter.
-
-### The browser says the model is missing
-
-This is expected before `make export`. Confirm both ignored files exist in `web/public/models/` and
-serve the Vite app from `web/`; opening `index.html` directly will not work.
-
-### Camera access fails
-
-Use `http://127.0.0.1`, `http://localhost`, or HTTPS; camera access is blocked on ordinary insecure
-origins. Check browser site permissions and close other apps that exclusively own the camera.
-
-### WebGPU is unavailable
-
-The app falls back to WASM CPU and displays the selected runtime. Update the browser and GPU driver
-before treating lower WASM performance as a model defect.
-
-### The alarm never sounds or will not clear
-
-Click **Start camera** once to unlock Web Audio. Warning requires at least 15 valid face frames over
-roughly two seconds. It clears after a full second below `threshold - 0.15`, or after face loss. Check
-the mute button and exported decision values in `model-metadata.json` before changing the UI.
-
-## Continue on the ROCm rig with Codex
-
-Codex on the Ubuntu rig must read this entire README before editing or running commands. Treat the
-configuration, dataset revision, labels, official test boundary, ONNX I/O, and publication boundary
-as fixed decisions. Do not commit the dataset, weights, copied samples, or generated artifacts.
-
-Handoff state:
-
-| Item | Value |
-| --- | --- |
-| Repository | `yt22-orb/driver-drowsiness-rocm` |
-| Branch | `Ken/initial-mvp` |
-| Pull request | [#1 — Build ROCm driver drowsiness MVP](https://github.com/yt22-orb/driver-drowsiness-rocm/pull/1) |
-| Implementation handoff commit | `d42763f` |
-
-Verification boundary:
-
-| Verified on the Mac | Must be verified on the RX 7800 XT rig |
-| --- | --- |
-| Python formatting and lint | `/dev/kfd` and RX 7800 XT detection |
-| Unit tests with synthetic data | Full 2.76 GB dataset audit/download |
-| CPU forward/backward smoke step | ROCm FP16 mixed-precision training |
-| Random-weight ONNX graph/parity | Complete model convergence and checkpoint selection |
-| TypeScript typecheck and production build | Final official-test metrics |
-| CI-equivalent Python/browser commands | Trained ONNX browser score and alarm behavior |
-
-On the rig, copy [`scripts/rig-results-template.md`](scripts/rig-results-template.md) to a dated file,
-fill it with exact commands and outputs, and update this README's dated results section. Never invent
-metrics. If a step fails, preserve the error and diagnose it before moving to the next stage.
-
-### Rig acceptance checklist
-
-- [ ] `make rocm-check` reports HIP and the RX 7800 XT.
-- [ ] Full audit completes with no unexplained corrupt images.
-- [ ] Dedup manifest revision matches the pinned dataset commit.
-- [ ] Training produces finite losses and a selected checkpoint.
-- [ ] Evaluation writes every documented metric using the frozen threshold.
+- [ ] Audit completes with no unexplained corrupt images.
+- [ ] Training starts from the custom architecture's random initialization.
+- [ ] History contains finite training and validation loss for every epoch.
+- [ ] `best.pt` has `checkpoint_format=drowsiness-cnn-v1` and
+  `weights_origin=trained_from_scratch`.
+- [ ] Threshold calibration uses validation data only.
+- [ ] Official-test metrics are recorded without claiming real-world certification.
 - [ ] ONNX parity passes on 100 official test images.
-- [ ] Browser runs through WebGPU and separately through forced WASM fallback.
-- [ ] Webcam no-face, one-face, sustained-warning, clearing, and mute states work.
-- [ ] Image upload accepts JPEG/PNG, rejects other types, and never sounds the alarm.
-- [ ] Final artifact hashes and observed performance are recorded.
+- [ ] Browser WebGPU and WASM paths both load schema-v2 metadata and the custom ONNX file.
+- [ ] Webcam and image input are tested with the documented center-crop framing.
 
-### Dated rig results
-
-No RX 7800 XT run has been performed yet. Add results here only after executing them on the target
-Ubuntu machine.
+The source dataset has no subject identifiers, so driver-disjoint generalization cannot be measured
+from the supplied data. Lighting, eyewear, pose, occlusion, camera quality, demographics, and vehicle
+motion can all cause domain shift. Dataset accuracy alone is not evidence of safe on-road behavior.

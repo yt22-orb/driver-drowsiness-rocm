@@ -1,4 +1,4 @@
-"""Fine-tune MobileNetV3-Small on the pinned drowsiness dataset."""
+"""Train the repository-owned drowsiness CNN from random initialization."""
 
 from __future__ import annotations
 
@@ -13,8 +13,8 @@ from torch.utils.data import DataLoader
 
 from .config import load_config
 from .data import prepare_datasets
-from .engine import train_one_epoch
-from .model import build_model
+from .engine import run_inference, train_one_epoch
+from .model import CHECKPOINT_FORMAT, build_model
 from .utils import append_jsonl, resolve_device, seed_everything, write_json
 
 
@@ -53,6 +53,12 @@ def main() -> None:
         generator=generator,
         **common_loader,
     )
+    validation_loader = DataLoader(
+        prepared.validation,
+        batch_size=config.training.batch_size,
+        shuffle=False,
+        **common_loader,
+    )
     model = build_model(config.model).to(device)
     counts = Counter(prepared.train_labels)
     total = sum(counts.values())
@@ -78,6 +84,9 @@ def main() -> None:
     history_path = output_dir / "history.jsonl"
     history_path.unlink(missing_ok=True)
     checkpoint_path = output_dir / "best.pt"
+    last_checkpoint_path = output_dir / "last.pt"
+    best_validation_loss = float("inf")
+    best_epoch = 0
 
     started = time.time()
     for epoch in range(1, config.training.epochs + 1):
@@ -90,32 +99,52 @@ def main() -> None:
             device,
             use_amp=use_amp,
         )
+        validation = run_inference(
+            model,
+            validation_loader,
+            device,
+            criterion=criterion,
+            use_amp=use_amp,
+        )
+        improved = validation.mean_loss < best_validation_loss
+        if improved:
+            best_validation_loss = validation.mean_loss
+            best_epoch = epoch
         record = {
             "epoch": epoch,
             "learning_rate": optimizer.param_groups[0]["lr"],
             "train_loss": train_loss,
+            "validation_loss": validation.mean_loss,
+            "best": improved,
         }
         append_jsonl(history_path, record)
         print(record)
-        torch.save(
-            {
-                "model_state_dict": model.state_dict(),
-                "threshold": 0.5,
-                "threshold_calibrated": False,
-                "validation_metrics": None,
-                "config": config.to_dict(),
-                "epoch": epoch,
-                "labels": ["Drowsy", "Non Drowsy"],
-            },
-            checkpoint_path,
-        )
+        checkpoint = {
+            "checkpoint_format": CHECKPOINT_FORMAT,
+            "architecture": config.model.architecture,
+            "weights_origin": "trained_from_scratch",
+            "model_state_dict": model.state_dict(),
+            "threshold": 0.5,
+            "threshold_calibrated": False,
+            "validation_metrics": None,
+            "validation_loss": validation.mean_loss,
+            "config": config.to_dict(),
+            "epoch": epoch,
+            "labels": ["Drowsy", "Non Drowsy"],
+        }
+        torch.save(checkpoint, last_checkpoint_path)
+        if improved:
+            torch.save(checkpoint, checkpoint_path)
         scheduler.step()
 
     write_json(
         output_dir / "training-summary.json",
         {
             "checkpoint": str(checkpoint_path),
+            "last_checkpoint": str(last_checkpoint_path),
             "epochs_completed": config.training.epochs,
+            "best_epoch": best_epoch,
+            "best_validation_loss": best_validation_loss,
             "evaluation_deferred": True,
             "device": str(device),
             "torch_version": torch.__version__,
@@ -123,7 +152,8 @@ def main() -> None:
             "elapsed_seconds": time.time() - started,
         },
     )
-    print(f"Latest checkpoint: {checkpoint_path}")
+    print(f"Best checkpoint: {checkpoint_path} (epoch {best_epoch})")
+    print(f"Last checkpoint: {last_checkpoint_path}")
     print("Run `make evaluate` to calibrate the threshold and evaluate the test split.")
 
 

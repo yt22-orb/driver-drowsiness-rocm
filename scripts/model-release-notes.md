@@ -1,35 +1,36 @@
-## Driver drowsiness model v0.1.0
+## Driver drowsiness custom CNN v1.0.0
 
-This release contains the trained epoch-15 MobileNetV3-Small checkpoint and the browser-ready FP32
-ONNX export. Follow [`RUN_MODEL.md`](https://github.com/yt22-orb/driver-drowsiness-rocm/blob/agent/runnable-model-release/RUN_MODEL.md)
-to try it with a local camera or uploaded image.
+This release contains the repository-defined `drowsiness_cnn_v1`, trained from random
+initialization. It is separate from the earlier pretrained MobileNetV3 release. The accompanying
+browser app can select either model and applies each model's original preprocessing contract.
 
-### Test results
+### Recorded run
 
-- Official test samples: 8,359
-- Accuracy: 99.9880%
-- Balanced accuracy: 99.9888%
-- Drowsy precision: 100.0000%
-- Drowsy recall: 99.9777%
-- Drowsy F1: 99.9888%
-- Matthews correlation coefficient: 99.9760%
-- ROC-AUC: 100.0000%
-- Confusion matrix `[Drowsy, Non Drowsy]`: `[[4479, 1], [0, 3879]]`
-- ONNX parity: 100 samples, zero prediction mismatches, maximum absolute logit difference 2.53e-05
+- Best checkpoint: epoch 15; validation loss `0.000013302130465320622`
+- Official test set: 8,359 images
+- Accuracy, balanced accuracy, drowsy precision/recall/F1, MCC, and ROC-AUC: `1.0`
+- Confusion matrix `[Drowsy, Non Drowsy]`: `[[4480, 0], [0, 3879]]`
+- Calibrated drowsy threshold: `0.9966691136360168`
+- ONNX parity: 100 samples, 0 prediction mismatches, maximum logit difference `6.198883056640625e-06`
+- Hardware: AMD Radeon RX 7800 XT
+- Runtime: ROCm 7.2.1, PyTorch `2.9.1+rocm7.2.1.gitff65f5bc`
 
 ### Assets
 
-- `best.pt`: original PyTorch checkpoint with calibrated decision threshold
-- `drowsiness-mobilenet-v3-small.onnx`: browser-ready model weights
-- `model-metadata.json`: preprocessing, labels, threshold, metrics, and ONNX contract
+- `drowsiness-cnn-v1-best.pt`: repository checkpoint marked `trained_from_scratch`
+- `drowsiness-cnn-v1.onnx`: browser-ready custom CNN weights
+- `model-metadata.json`: schema-v2 architecture, preprocessing, labels, threshold, and metrics
 - `test-metrics.json`: exact validation and official-test metric payload
-- `driver-drowsiness-model-report.docx`: editable findings report
-- `driver-drowsiness-model-report.pdf`: PDF findings report
+- `driver-drowsiness-full-technical-documentation.docx` and `.pdf`: generated technical report
+- `drowsiness-cnn-v1-v1.0.0.tar.gz`: bundle containing the model artifacts above
+- `SHA256SUMS`: hashes for every uploaded release asset except the checksum file itself
 
 ### Important limitations
 
-This is an experimental thesis prototype, not a certified automotive safety system. Never test it
-while driving. The dataset does not provide subject identifiers, so driver-disjoint generalization
-has not been established. The source dataset card declares no license; these derived weights are
-provided for research and evaluation without granting rights to the source dataset. Review and
-resolve the source dataset's terms before redistribution or non-research use.
+This is an experimental thesis prototype, not a certified automotive safety system. The source
+dataset contains face crops and does not provide subject identifiers, so driver-disjoint or full-scene
+generalization has not been established. The browser requires the face to be centered inside its
+fixed crop guide. Resolve the source dataset's terms before distributing derived weights.
+
+The perfect result on this dataset is not evidence of real-world reliability and should be treated
+as a prompt for leakage, domain-shift, and driver-disjoint follow-up evaluation.

@@ -15,9 +15,9 @@ import torch
 from torch.utils.data import DataLoader
 
 from .config import ProjectConfig, load_config
-from .constants import IMAGE_NET_MEAN, IMAGE_NET_STD, LABELS
+from .constants import INPUT_MEAN, INPUT_STD, LABELS
 from .data import prepare_datasets
-from .model import build_model
+from .model import architecture_metadata, build_model, validate_checkpoint
 from .utils import write_json
 
 
@@ -90,14 +90,21 @@ def verify_parity(
 def metadata_payload(
     config: ProjectConfig,
     checkpoint: dict[str, object],
+    model: torch.nn.Module,
     model_filename: str,
     metrics: dict[str, object] | None,
 ) -> dict[str, object]:
     return {
-        "schemaVersion": 1,
-        "modelVersion": "0.1.0",
+        "schemaVersion": 2,
+        "modelVersion": "1.0.0",
         "modelFile": model_filename,
         "architecture": config.model.architecture,
+        "architectureDetails": architecture_metadata(model),
+        "weights": {
+            "origin": "trained from random initialization by this repository",
+            "externalCheckpoint": False,
+            "checkpointEpoch": int(checkpoint["epoch"]),
+        },
         "dataset": {
             "id": config.data.dataset_id,
             "revision": config.data.revision,
@@ -111,8 +118,14 @@ def metadata_payload(
             "dtype": "float32",
             "width": config.model.image_size,
             "height": config.model.image_size,
-            "mean": list(IMAGE_NET_MEAN),
-            "std": list(IMAGE_NET_STD),
+            "colorSpace": "RGB",
+            "valueRangeBeforeNormalization": [0.0, 1.0],
+            "mean": list(INPUT_MEAN),
+            "std": list(INPUT_STD),
+            "source": "centered square face crop",
+            "cropStrategy": "center-square",
+            "cropFraction": config.model.camera_crop_fraction,
+            "interpolation": "browser canvas bilinear",
         },
         "output": {"name": "logits", "shape": [1, 2]},
         "decision": {
@@ -142,7 +155,8 @@ def main() -> None:
     config = load_config(args.config)
     checkpoint_path = Path(args.checkpoint or Path(config.training.output_dir) / "best.pt")
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    model = build_model(config.model, pretrained=False)
+    validate_checkpoint(checkpoint, config.model)
+    model = build_model(config.model)
     model.load_state_dict(checkpoint["model_state_dict"])
     onnx_path = export_onnx_model(
         model, config.export.onnx_path, config.model.image_size, config.export.opset
@@ -159,7 +173,7 @@ def main() -> None:
     metrics = (
         json.loads(metrics_path.read_text(encoding="utf-8")) if metrics_path.exists() else None
     )
-    metadata = metadata_payload(config, checkpoint, onnx_path.name, metrics)
+    metadata = metadata_payload(config, checkpoint, model, onnx_path.name, metrics)
     metadata["onnxParity"] = parity
     metadata_path = write_json(config.export.metadata_path, metadata)
 
@@ -167,6 +181,7 @@ def main() -> None:
     web_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(onnx_path, web_dir / onnx_path.name)
     shutil.copy2(metadata_path, web_dir / "model-metadata.json")
+    shutil.copy2(metadata_path, web_dir / f"{onnx_path.stem}.metadata.json")
     print(f"ONNX: {onnx_path}")
     print(f"Metadata: {metadata_path}")
     print(f"Browser assets: {web_dir}")

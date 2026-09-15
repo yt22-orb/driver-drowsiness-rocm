@@ -14,13 +14,16 @@ data:
   dedup_manifest: artifacts/audit/dedup-manifest.json
 
 model:
-  architecture: mobilenet_v3_small
-  pretrained: true
+  architecture: drowsiness_cnn_v1
   image_size: 224
   num_classes: 2
+  dropout: 0.25
+  # The browser takes this centered fraction of the shortest source dimension.
+  # Drivers must position their face inside the visible guide.
+  camera_crop_fraction: 0.70
 
 training:
-  output_dir: artifacts/runs/mobilenet-v3-small
+  output_dir: artifacts/runs/drowsiness-cnn-v1
   epochs: 15
   batch_size: 128
   learning_rate: 0.0003
@@ -38,6 +41,6 @@ decision:
 export:
   opset: 18
   parity_samples: 100
-  onnx_path: artifacts/export/drowsiness-mobilenet-v3-small.onnx
+  onnx_path: artifacts/export/drowsiness-cnn-v1.onnx
   metadata_path: artifacts/export/model-metadata.json
   web_model_dir: web/public/models

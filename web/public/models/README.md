@@ -1,9 +1,15 @@
 # Generated model assets
 
-This directory intentionally contains no trained model. Run the training, evaluation, and export
-commands from the repository root. The export step writes these ignored files here:
+Generated and downloaded browser model assets are ignored by Git. The custom export writes:
+
+- `drowsiness-cnn-v1.onnx`
+- `model-metadata.json`
+- `drowsiness-cnn-v1.metadata.json`
+
+The selector also uses these assets from GitHub Release `v0.1.0-model`:
 
 - `drowsiness-mobilenet-v3-small.onnx`
-- `model-metadata.json`
+- `mobilenet-v3-small.metadata.json`
 
-Do not commit either artifact until the dataset and derived-weight licensing has been resolved.
+Do not commit the generated or downloaded artifacts until the dataset and derived-weight licensing
+has been resolved.

@@ -11,6 +11,8 @@ def test_mvp_config_is_pinned() -> None:
     assert config.data.revision == DATASET_REVISION
     assert config.model.num_classes == len(LABELS)
     assert config.model.image_size == 224
+    assert config.model.architecture == "drowsiness_cnn_v1"
+    assert config.model.camera_crop_fraction == 0.70
     assert config.data.pin_memory is False
     assert config.data.persistent_workers is False
 

@@ -24,12 +24,35 @@ const startButton = byId<HTMLButtonElement>("start-camera");
 const stopButton = byId<HTMLButtonElement>("stop-camera");
 const imageInput = byId<HTMLInputElement>("image-input");
 const muteButton = byId<HTMLButtonElement>("mute");
+const modelSelect = byId<HTMLSelectElement>("model-select");
+const modelHelp = byId<HTMLSpanElement>("model-help");
+const inputHelpText = byId<HTMLSpanElement>("input-help-text");
+
+type ModelId = "custom" | "mobilenet";
+
+const models: Record<
+  ModelId,
+  { metadataPath: string; label: string; inputHelp: string; usesFaceDetector: boolean }
+> = {
+  custom: {
+    metadataPath: "/models/drowsiness-cnn-v1.metadata.json",
+    label: "Custom CNN",
+    inputHelp: "Keep one face centered and filling the square guide.",
+    usesFaceDetector: false,
+  },
+  mobilenet: {
+    metadataPath: "/models/mobilenet-v3-small.metadata.json",
+    label: "MobileNetV3",
+    inputHelp: "The legacy pipeline detects the largest face automatically before classification.",
+    usesFaceDetector: true,
+  },
+};
 
 let metadata: ModelMetadata;
 let session: ort.InferenceSession;
-let videoDetector: FaceDetector;
-let imageDetector: FaceDetector;
 let scoreWindow: ScoreWindow;
+let videoDetector: FaceDetector | null = null;
+let imageDetector: FaceDetector | null = null;
 let stream: MediaStream | null = null;
 let animationFrame = 0;
 let lastInferenceAt = 0;
@@ -37,11 +60,13 @@ let muted = false;
 let alarmTimer: number | null = null;
 let audioContext: AudioContext | null = null;
 let currentState: AppState = "loading";
+let selectedModel: ModelId = "custom";
 let faceDelegate = "GPU";
 
 const stateText: Record<AppState, string> = {
   loading: "Loading model…",
   ready: "Ready",
+  positioning: "Center face in the crop guide",
   "no-face": "No face detected",
   attentive: "No drowsiness detected",
   possible: "Checking sustained signal…",
@@ -69,58 +94,97 @@ function setScore(score: number | null): void {
   meterFill.style.width = `${percent}%`;
 }
 
-async function initialize(): Promise<void> {
-  try {
-    const metadataResponse = await fetch("/models/model-metadata.json", { cache: "no-store" });
-    const metadataType = metadataResponse.headers.get("content-type") ?? "";
-    if (!metadataResponse.ok || !metadataType.includes("application/json")) {
-      throw new Error("Trained model metadata is missing. Run training, evaluation, and export first.");
-    }
-    metadata = (await metadataResponse.json()) as ModelMetadata;
-    if (metadata.schemaVersion !== 1 || metadata.labels.length !== 2) {
-      throw new Error("Unsupported model metadata contract");
-    }
+function validateMetadata(candidate: ModelMetadata, modelId: ModelId): void {
+  const commonContract =
+    candidate.labels.length === 2 &&
+    candidate.input.layout === "NCHW" &&
+    candidate.input.dtype === "float32" &&
+    candidate.output.shape[1] === 2;
+  const customContract =
+    modelId === "custom" &&
+    candidate.schemaVersion === 2 &&
+    candidate.architecture === "drowsiness_cnn_v1" &&
+    candidate.weights?.externalCheckpoint === false &&
+    candidate.input.cropStrategy === "center-square" &&
+    candidate.input.cropFraction !== undefined &&
+    candidate.input.cropFraction > 0 &&
+    candidate.input.cropFraction <= 1;
+  const legacyContract =
+    modelId === "mobilenet" &&
+    candidate.schemaVersion === 1 &&
+    candidate.architecture === "mobilenet_v3_small";
+  if (!commonContract || (!customContract && !legacyContract)) {
+    throw new Error(`Unsupported metadata contract for ${models[modelId].label}`);
+  }
+}
 
-    ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.27.0/dist/";
+async function initializeFaceDetectors(): Promise<void> {
+  if (videoDetector && imageDetector) return;
+  const vision = await FilesetResolver.forVisionTasks(
+    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm",
+  );
+  const detectorModel =
+    "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/latest/blaze_face_short_range.tflite";
+  try {
+    videoDetector = await FaceDetector.createFromOptions(vision, {
+      baseOptions: { modelAssetPath: detectorModel, delegate: "GPU" },
+      runningMode: "VIDEO",
+      minDetectionConfidence: 0.5,
+    });
+    imageDetector = await FaceDetector.createFromOptions(vision, {
+      baseOptions: { modelAssetPath: detectorModel, delegate: "GPU" },
+      runningMode: "IMAGE",
+      minDetectionConfidence: 0.5,
+    });
+  } catch (gpuError) {
+    console.warn("MediaPipe GPU delegate unavailable; falling back to CPU", gpuError);
+    faceDelegate = "CPU";
+    videoDetector = await FaceDetector.createFromOptions(vision, {
+      baseOptions: { modelAssetPath: detectorModel, delegate: "CPU" },
+      runningMode: "VIDEO",
+      minDetectionConfidence: 0.5,
+    });
+    imageDetector = await FaceDetector.createFromOptions(vision, {
+      baseOptions: { modelAssetPath: detectorModel, delegate: "CPU" },
+      runningMode: "IMAGE",
+      minDetectionConfidence: 0.5,
+    });
+  }
+}
+
+async function loadModel(modelId: ModelId): Promise<void> {
+  stopCamera();
+  selectedModel = modelId;
+  modelSelect.value = modelId;
+  modelSelect.disabled = true;
+  startButton.disabled = true;
+  imageInput.disabled = true;
+  setScore(null);
+  uploadedImage.hidden = true;
+  video.hidden = false;
+  emptyState.hidden = false;
+  overlay.getContext("2d")?.clearRect(0, 0, overlay.width, overlay.height);
+  setState("loading", `Loading ${models[modelId].label}…`);
+  modelHelp.textContent = `Loading ${models[modelId].label}…`;
+  inputHelpText.textContent = models[modelId].inputHelp;
+  try {
+    const response = await fetch(models[modelId].metadataPath, { cache: "no-store" });
+    const contentType = response.headers.get("content-type") ?? "";
+    if (!response.ok || !contentType.includes("application/json")) {
+      throw new Error(`${models[modelId].label} metadata is missing`);
+    }
+    const candidate = (await response.json()) as ModelMetadata;
+    validateMetadata(candidate, modelId);
+    if (models[modelId].usesFaceDetector) await initializeFaceDetectors();
+
     const prefersWebGpu = "gpu" in navigator;
-    const executionProviders = prefersWebGpu ? ["webgpu", "wasm"] : ["wasm"];
-    session = await ort.InferenceSession.create(`/models/${metadata.modelFile}`, {
-      executionProviders,
+    const replacement = await ort.InferenceSession.create(`/models/${candidate.modelFile}`, {
+      executionProviders: prefersWebGpu ? ["webgpu", "wasm"] : ["wasm"],
       graphOptimizationLevel: "all",
     });
-    runtimeElement.textContent = `Inference: ${prefersWebGpu ? "WebGPU with WASM fallback" : "WASM CPU"}`;
-
-    const vision = await FilesetResolver.forVisionTasks(
-      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm",
-    );
-    const detectorModel =
-      "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/latest/blaze_face_short_range.tflite";
-    try {
-      videoDetector = await FaceDetector.createFromOptions(vision, {
-        baseOptions: { modelAssetPath: detectorModel, delegate: "GPU" },
-        runningMode: "VIDEO",
-        minDetectionConfidence: 0.5,
-      });
-      imageDetector = await FaceDetector.createFromOptions(vision, {
-        baseOptions: { modelAssetPath: detectorModel, delegate: "GPU" },
-        runningMode: "IMAGE",
-        minDetectionConfidence: 0.5,
-      });
-    } catch (gpuError) {
-      console.warn("MediaPipe GPU delegate unavailable; falling back to CPU", gpuError);
-      faceDelegate = "CPU";
-      videoDetector = await FaceDetector.createFromOptions(vision, {
-        baseOptions: { modelAssetPath: detectorModel, delegate: "CPU" },
-        runningMode: "VIDEO",
-        minDetectionConfidence: 0.5,
-      });
-      imageDetector = await FaceDetector.createFromOptions(vision, {
-        baseOptions: { modelAssetPath: detectorModel, delegate: "CPU" },
-        runningMode: "IMAGE",
-        minDetectionConfidence: 0.5,
-      });
-    }
-    runtimeElement.textContent += `; face detector: ${faceDelegate}`;
+    session?.release();
+    metadata = candidate;
+    session = replacement;
     scoreWindow = new ScoreWindow(
       metadata.decision.windowSeconds,
       metadata.decision.minimumValidFrames,
@@ -128,28 +192,105 @@ async function initialize(): Promise<void> {
       metadata.decision.clearMargin,
       metadata.decision.clearSeconds,
     );
+    const detectorRuntime = models[modelId].usesFaceDetector
+      ? `; face detector: ${faceDelegate}`
+      : "; fixed center crop";
+    runtimeElement.textContent = `${models[modelId].label}: ${
+      prefersWebGpu ? "WebGPU with WASM fallback" : "WASM CPU"
+    }${detectorRuntime}`;
+    modelHelp.textContent = `${models[modelId].label} v${metadata.modelVersion} selected`;
     startButton.disabled = false;
     imageInput.disabled = false;
     setState("ready");
   } catch (error) {
     console.error(error);
     setState("error", error instanceof Error ? error.message : "Model initialization failed");
-    runtimeElement.textContent = "See README: the trained ONNX model is not committed to GitHub.";
+    runtimeElement.textContent = "Confirm both model files and metadata files are installed.";
+  } finally {
+    modelSelect.disabled = false;
   }
 }
 
-function largestFace(detections: Detection[]): Detection | null {
-  return (
-    detections.reduce<Detection | null>((largest, detection) => {
-      const box = detection.boundingBox;
-      const largestBox = largest?.boundingBox;
-      if (!box) return largest;
-      if (!largestBox || box.width * box.height > largestBox.width * largestBox.height) {
-        return detection;
-      }
-      return largest;
-    }, null) ?? null
+async function initialize(): Promise<void> {
+  ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.27.0/dist/";
+  await loadModel("custom");
+}
+
+interface CropRegion {
+  x: number;
+  y: number;
+  size: number;
+  sourceWidth: number;
+  sourceHeight: number;
+}
+
+function cropRegion(source: HTMLVideoElement | HTMLImageElement): CropRegion | null {
+  const sourceWidth = source instanceof HTMLVideoElement ? source.videoWidth : source.naturalWidth;
+  const sourceHeight = source instanceof HTMLVideoElement ? source.videoHeight : source.naturalHeight;
+  const size = Math.floor(
+    Math.min(sourceWidth, sourceHeight) * (metadata.input.cropFraction ?? 0.7),
   );
+  if (size <= 0) return null;
+  return {
+    x: Math.floor((sourceWidth - size) / 2),
+    y: Math.floor((sourceHeight - size) / 2),
+    size,
+    sourceWidth,
+    sourceHeight,
+  };
+}
+
+function regionTensor(
+  source: HTMLVideoElement | HTMLImageElement,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+): ort.Tensor | null {
+  const canvas = document.createElement("canvas");
+  canvas.width = metadata.input.width;
+  canvas.height = metadata.input.height;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) return null;
+  context.drawImage(
+    source,
+    x,
+    y,
+    width,
+    height,
+    0,
+    0,
+    canvas.width,
+    canvas.height,
+  );
+  const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+  const plane = canvas.width * canvas.height;
+  const values = new Float32Array(plane * 3);
+  for (let pixelIndex = 0; pixelIndex < plane; pixelIndex += 1) {
+    for (let channel = 0; channel < 3; channel += 1) {
+      const raw = pixels[pixelIndex * 4 + channel] ?? 0;
+      values[channel * plane + pixelIndex] =
+        (raw / 255 - metadata.input.mean[channel]!) / metadata.input.std[channel]!;
+    }
+  }
+  return new ort.Tensor("float32", values, [1, 3, canvas.height, canvas.width]);
+}
+
+function centerCropTensor(source: HTMLVideoElement | HTMLImageElement): ort.Tensor | null {
+  const crop = cropRegion(source);
+  return crop ? regionTensor(source, crop.x, crop.y, crop.size, crop.size) : null;
+}
+
+function largestFace(detections: Detection[]): Detection | null {
+  return detections.reduce<Detection | null>((largest, detection) => {
+    const box = detection.boundingBox;
+    const largestBox = largest?.boundingBox;
+    if (!box) return largest;
+    if (!largestBox || box.width * box.height > largestBox.width * largestBox.height) {
+      return detection;
+    }
+    return largest;
+  }, null);
 }
 
 function faceTensor(
@@ -166,32 +307,14 @@ function faceTensor(
   const y = Math.max(0, box.originY - paddingY);
   const width = Math.min(sourceWidth - x, box.width + paddingX * 2);
   const height = Math.min(sourceHeight - y, box.height + paddingY * 2);
-  if (width <= 0 || height <= 0) return null;
-
-  const canvas = document.createElement("canvas");
-  canvas.width = metadata.input.width;
-  canvas.height = metadata.input.height;
-  const context = canvas.getContext("2d", { willReadFrequently: true });
-  if (!context) return null;
-  context.drawImage(source, x, y, width, height, 0, 0, canvas.width, canvas.height);
-  const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
-  const plane = canvas.width * canvas.height;
-  const values = new Float32Array(plane * 3);
-  for (let pixelIndex = 0; pixelIndex < plane; pixelIndex += 1) {
-    for (let channel = 0; channel < 3; channel += 1) {
-      const raw = pixels[pixelIndex * 4 + channel] ?? 0;
-      values[channel * plane + pixelIndex] =
-        (raw / 255 - metadata.input.mean[channel]!) / metadata.input.std[channel]!;
-    }
-  }
-  return new ort.Tensor("float32", values, [1, 3, canvas.height, canvas.width]);
+  return width > 0 && height > 0 ? regionTensor(source, x, y, width, height) : null;
 }
 
 async function classify(
   source: HTMLVideoElement | HTMLImageElement,
-  detection: Detection,
+  detection?: Detection,
 ): Promise<number | null> {
-  const tensor = faceTensor(source, detection);
+  const tensor = detection ? faceTensor(source, detection) : centerCropTensor(source);
   if (!tensor) return null;
   const results = await session.run({ [metadata.input.name]: tensor });
   const logits = results[metadata.output.name]?.data;
@@ -215,6 +338,20 @@ function drawFace(detection: Detection | null, sourceWidth: number, sourceHeight
   context.strokeRect(box.originX, box.originY, box.width, box.height);
 }
 
+function drawCropGuide(source: HTMLVideoElement | HTMLImageElement): void {
+  const crop = cropRegion(source);
+  if (!crop) return;
+  overlay.width = crop.sourceWidth;
+  overlay.height = crop.sourceHeight;
+  const context = overlay.getContext("2d");
+  if (!context) return;
+  context.clearRect(0, 0, overlay.width, overlay.height);
+  context.strokeStyle = currentState === "warning" ? "#ff4e57" : "#58d6b2";
+  context.lineWidth = Math.max(2, crop.sourceWidth / 240);
+  context.setLineDash([context.lineWidth * 3, context.lineWidth * 2]);
+  context.strokeRect(crop.x, crop.y, crop.size, crop.size);
+}
+
 async function processVideoFrame(now: number): Promise<void> {
   animationFrame = requestAnimationFrame((timestamp) => void processVideoFrame(timestamp));
   if (!stream || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || now - lastInferenceAt < 100) {
@@ -222,14 +359,21 @@ async function processVideoFrame(now: number): Promise<void> {
   }
   lastInferenceAt = now;
   try {
-    const result = videoDetector.detectForVideo(video, now);
-    const face = largestFace(result.detections);
-    drawFace(face, video.videoWidth, video.videoHeight);
-    if (!face) {
-      scoreWindow.reset();
-      setScore(null);
-      setState("no-face");
-      return;
+    let face: Detection | undefined;
+    if (selectedModel === "mobilenet") {
+      const detected = videoDetector
+        ? largestFace(videoDetector.detectForVideo(video, now).detections)
+        : null;
+      drawFace(detected, video.videoWidth, video.videoHeight);
+      if (!detected) {
+        scoreWindow.reset();
+        setScore(null);
+        setState("no-face");
+        return;
+      }
+      face = detected;
+    } else {
+      drawCropGuide(video);
     }
     const score = await classify(video, face);
     if (score === null) return;
@@ -259,7 +403,8 @@ async function startCamera(): Promise<void> {
     startButton.disabled = true;
     stopButton.disabled = false;
     scoreWindow.reset();
-    setState("no-face");
+    setState(selectedModel === "mobilenet" ? "no-face" : "positioning");
+    if (selectedModel === "custom") drawCropGuide(video);
     animationFrame = requestAnimationFrame((timestamp) => void processVideoFrame(timestamp));
   } catch (error) {
     console.error(error);
@@ -282,7 +427,7 @@ function stopCamera(): void {
 }
 
 async function processUploadedImage(file: File): Promise<void> {
-  if (!['image/jpeg', 'image/png'].includes(file.type)) {
+  if (!["image/jpeg", "image/png"].includes(file.type)) {
     setState("error", "Only JPEG and PNG images are supported");
     return;
   }
@@ -294,13 +439,18 @@ async function processUploadedImage(file: File): Promise<void> {
     video.hidden = true;
     uploadedImage.hidden = false;
     emptyState.hidden = true;
-    const result = imageDetector.detect(uploadedImage);
-    const face = largestFace(result.detections);
-    drawFace(face, uploadedImage.naturalWidth, uploadedImage.naturalHeight);
-    if (!face) {
-      setScore(null);
-      setState("no-face");
-      return;
+    let face: Detection | undefined;
+    if (selectedModel === "mobilenet") {
+      const detected = imageDetector ? largestFace(imageDetector.detect(uploadedImage).detections) : null;
+      drawFace(detected, uploadedImage.naturalWidth, uploadedImage.naturalHeight);
+      if (!detected) {
+        setScore(null);
+        setState("no-face");
+        return;
+      }
+      face = detected;
+    } else {
+      drawCropGuide(uploadedImage);
     }
     const score = await classify(uploadedImage, face);
     if (score === null) return;
@@ -349,6 +499,7 @@ muteButton.addEventListener("click", () => {
   if (muted) stopAlarm();
   else if (currentState === "warning") startAlarm();
 });
+modelSelect.addEventListener("change", () => void loadModel(modelSelect.value as ModelId));
 window.addEventListener("pagehide", stopCamera);
 
 void initialize();

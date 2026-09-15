@@ -26,15 +26,16 @@ class DataConfig:
 
 @dataclass(slots=True)
 class ModelConfig:
-    architecture: str = "mobilenet_v3_small"
-    pretrained: bool = True
+    architecture: str = "drowsiness_cnn_v1"
     image_size: int = 224
     num_classes: int = 2
+    dropout: float = 0.25
+    camera_crop_fraction: float = 0.70
 
 
 @dataclass(slots=True)
 class TrainingConfig:
-    output_dir: str = "artifacts/runs/mobilenet-v3-small"
+    output_dir: str = "artifacts/runs/drowsiness-cnn-v1"
     epochs: int = 15
     batch_size: int = 128
     learning_rate: float = 3e-4
@@ -56,7 +57,7 @@ class DecisionConfig:
 class ExportConfig:
     opset: int = 18
     parity_samples: int = 100
-    onnx_path: str = "artifacts/export/drowsiness-mobilenet-v3-small.onnx"
+    onnx_path: str = "artifacts/export/drowsiness-cnn-v1.onnx"
     metadata_path: str = "artifacts/export/model-metadata.json"
     web_model_dir: str = "web/public/models"
 
@@ -96,10 +97,16 @@ def validate_config(config: ProjectConfig) -> None:
         raise ValueError("validation_fraction must be between 0 and 0.5")
     if config.data.num_workers < 0:
         raise ValueError("num_workers must be non-negative")
-    if config.model.architecture != "mobilenet_v3_small":
-        raise ValueError("Only mobilenet_v3_small is supported by the MVP export contract")
+    if config.model.architecture != "drowsiness_cnn_v1":
+        raise ValueError("Only the repository-defined drowsiness_cnn_v1 is supported")
     if config.model.num_classes != 2:
         raise ValueError("The dataset contract requires exactly two classes")
+    if config.model.image_size < 64:
+        raise ValueError("model.image_size must be at least 64 pixels")
+    if not 0 <= config.model.dropout < 1:
+        raise ValueError("model.dropout must be in [0, 1)")
+    if not 0 < config.model.camera_crop_fraction <= 1:
+        raise ValueError("model.camera_crop_fraction must be in (0, 1]")
     if config.training.epochs < 1 or config.training.batch_size < 1:
         raise ValueError("epochs and batch_size must be positive")
     if config.decision.minimum_valid_frames < 1:

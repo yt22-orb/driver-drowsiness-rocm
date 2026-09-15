@@ -12,7 +12,7 @@ from .config import load_config
 from .data import prepare_datasets
 from .engine import run_inference
 from .metrics import classification_metrics, select_fbeta_threshold
-from .model import build_model
+from .model import build_model, validate_checkpoint
 from .utils import resolve_device, write_json
 
 
@@ -31,7 +31,8 @@ def main() -> None:
     checkpoint_path = Path(args.checkpoint or Path(config.training.output_dir) / "best.pt")
     device = resolve_device(args.device or config.training.device)
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    model = build_model(config.model, pretrained=False)
+    validate_checkpoint(checkpoint, config.model)
+    model = build_model(config.model)
     model.load_state_dict(checkpoint["model_state_dict"])
     model.to(device)
 

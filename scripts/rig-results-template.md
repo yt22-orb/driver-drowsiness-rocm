@@ -34,7 +34,8 @@ Record the full error, cause, changed files, and rerun result.
 ## Artifact hashes
 
 ```bash
-sha256sum artifacts/runs/mobilenet-v3-small/best.pt \
-  artifacts/export/drowsiness-mobilenet-v3-small.onnx \
+sha256sum artifacts/runs/drowsiness-cnn-v1/best.pt \
+  artifacts/runs/drowsiness-cnn-v1/last.pt \
+  artifacts/export/drowsiness-cnn-v1.onnx \
   artifacts/export/model-metadata.json
 ```

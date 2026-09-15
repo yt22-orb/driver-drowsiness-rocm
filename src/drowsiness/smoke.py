@@ -23,8 +23,8 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     torch.manual_seed(42)
-    config = ModelConfig(pretrained=False, image_size=args.image_size)
-    model = build_model(config, pretrained=False)
+    config = ModelConfig(image_size=args.image_size)
+    model = build_model(config)
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
     criterion = nn.CrossEntropyLoss()
     model.train()

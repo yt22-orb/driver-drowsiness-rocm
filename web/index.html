@@ -26,7 +26,7 @@
           <canvas id="overlay" aria-hidden="true"></canvas>
           <div id="empty-state" class="empty-state">
             <span class="camera-icon">◉</span>
-            <p>Start the camera or choose an image.</p>
+            <p>Start the camera or choose a centered face-crop image.</p>
           </div>
         </div>
 
@@ -38,6 +38,15 @@
               <strong id="status">Loading model…</strong>
             </div>
           </div>
+
+          <label class="model-picker">
+            <span class="label">MODEL</span>
+            <select id="model-select" disabled>
+              <option value="custom">Custom CNN (current)</option>
+              <option value="mobilenet">MobileNetV3 (GitHub release)</option>
+            </select>
+            <span id="model-help" class="fine-print">Loading the current custom CNN…</span>
+          </label>
 
           <div class="meter-block">
             <div class="meter-label">
@@ -59,6 +68,9 @@
           </div>
 
           <p class="privacy">No video, image, or score is uploaded. This is not a certified safety system.</p>
+          <p class="input-help">
+            <span id="input-help-text">Keep one face centered and filling the square guide.</span>
+          </p>
         </aside>
       </section>
     </main>
